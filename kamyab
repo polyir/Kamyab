@@ -1,0 +1,131 @@
+// SPDX-License-Identifier: MIT
+pragma ton-solidity >= 0.43.0;
+
+// قرارداد هوشمند توکن کامیاب بر بستر TON
+contract KamiyabTokenTON {
+
+    // ساختار نگهداری موجودی کاربران
+    struct Wallet {
+        uint128 balance; // موجودی کاربر
+    }
+
+    // نگهداری موجودی کاربران
+    mapping(address => Wallet) public wallets;
+    address public owner; // آدرس مالک قرارداد
+    uint128 public totalSupply = 100000000; // موجودی کل توکن
+
+    // رویداد انتقال توکن
+    event Transfer(address indexed from, address indexed to, uint128 amount);
+
+    // تابع سازنده برای تخصیص اولیه تمام توکن‌ها به مالک
+    constructor() public {
+        owner = msg.sender; // مالک اولیه
+        wallets[msg.sender].balance = totalSupply; // تخصیص کل موجودی به مالک
+    }
+
+    // محدود کردن دسترسی برخی توابع فقط به مالک قرارداد
+    modifier onlyOwner() {
+        require(msg.sender == owner, 101, "Only owner can perform this action");
+        _;
+    }
+
+    // تابع انتقال توکن بین کاربران
+    function transfer(address to, uint128 amount) public {
+        require(wallets[msg.sender].balance >= amount, 102, "Insufficient balance"); // بررسی موجودی کافی
+        wallets[msg.sender].balance -= amount; // کسر از موجودی فرستنده
+        wallets[to].balance += amount; // افزایش موجودی گیرنده
+        emit Transfer(msg.sender, to, amount); // اعلام انتقال توکن
+    }
+
+    // تابع دریافت موجودی یک کاربر
+    function getBalance(address walletAddress) public view returns (uint128) {
+        return wallets[walletAddress].balance;
+    }
+
+    // تابع تولید توکن جدید توسط مالک
+    function mint(uint128 amount) public onlyOwner {
+        wallets[owner].balance += amount;
+        totalSupply += amount;
+    }
+
+    // تابع سوزاندن توکن‌ها توسط مالک
+    function burn(uint128 amount) public onlyOwner {
+        require(wallets[owner].balance >= amount, 103, "Insufficient owner balance");
+        wallets[owner].balance -= amount;
+        totalSupply -= amount;
+    }
+}
+
+// قرارداد اسکرو برای مدیریت تراکنش‌ها
+contract EscrowPaymentTON {
+
+    // وضعیت‌های مختلف یک تراکنش
+    enum Status { AWAITING_PAYMENT, AWAITING_DELIVERY, COMPLETE, REFUNDED }
+
+    // ساختار یک تراکنش
+    struct Transaction {
+        address sender; // فرستنده
+        address receiver; // گیرنده
+        uint128 amount; // مبلغ تراکنش
+        Status status; // وضعیت تراکنش
+    }
+
+    // نگهداری تراکنش‌ها
+    mapping(uint256 => Transaction) public transactions;
+    uint256 public transactionCount; // تعداد کل تراکنش‌ها
+    address public owner; // مالک قرارداد
+    KamiyabTokenTON public token; // توکن مرتبط با قرارداد
+    uint128 public platformFeePercent = 5; // درصد کارمزد پلتفرم
+
+    // رویدادهای مرتبط با تراکنش‌ها
+    event TransactionInitiated(uint256 transactionId, address indexed sender, address indexed receiver, uint128 amount);
+    event TransactionCompleted(uint256 transactionId);
+    event TransactionRefunded(uint256 transactionId);
+
+    // تابع سازنده که آدرس توکن را می‌گیرد
+    constructor(address tokenAddress) public {
+        owner = msg.sender; // مالک قرارداد
+        token = KamiyabTokenTON(tokenAddress); // تنظیم آدرس توکن
+    }
+
+    // محدود کردن دسترسی به مالک قرارداد
+    modifier onlyOwner() {
+        require(msg.sender == owner, 104, "Only owner can perform this action");
+        _;
+    }
+
+    // شروع تراکنش اسکرو
+    function initiateTransaction(address receiver, uint128 amount) public {
+        require(token.getBalance(msg.sender) >= amount, 105, "Insufficient token balance"); // بررسی موجودی توکن
+        token.transfer(address(this), amount); // انتقال توکن به اسکرو
+        transactions[transactionCount] = Transaction(msg.sender, receiver, amount, Status.AWAITING_DELIVERY);
+        emit TransactionInitiated(transactionCount, msg.sender, receiver, amount);
+        transactionCount++; // افزایش تعداد تراکنش‌ها
+    }
+
+    // تأیید تحویل کالا و آزادسازی وجه
+    function confirmDelivery(uint256 transactionId) public {
+        Transaction storage txn = transactions[transactionId];
+        require(msg.sender == txn.sender, 106, "Only sender can confirm delivery"); // فقط فرستنده می‌تواند تأیید کند
+        require(txn.status == Status.AWAITING_DELIVERY, 107, "Incorrect transaction status");
+
+        uint128 platformFee = (txn.amount * platformFeePercent) / 100; // محاسبه کارمزد پلتفرم
+        uint128 paymentAmount = txn.amount - platformFee; // مبلغ نهایی به گیرنده
+
+        token.transfer(owner, platformFee); // انتقال کارمزد به مالک
+        token.transfer(txn.receiver, paymentAmount); // انتقال مبلغ به گیرنده
+
+        txn.status = Status.COMPLETE; // تکمیل تراکنش
+        emit TransactionCompleted(transactionId);
+    }
+
+    // بازگشت وجه در صورت لزوم توسط مالک
+    function refundTransaction(uint256 transactionId) public onlyOwner {
+        Transaction storage txn = transactions[transactionId];
+        require(txn.status == Status.AWAITING_DELIVERY, 108, "Incorrect transaction status");
+
+        token.transfer(txn.sender, txn.amount); // بازگشت مبلغ به فرستنده
+        txn.status = Status.REFUNDED; // تغییر وضعیت به بازگشت داده‌شده
+        emit TransactionRefunded(transactionId);
+    }
+}
