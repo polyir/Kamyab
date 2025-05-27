@@ -2,7 +2,7 @@
 pragma ton-solidity >= 0.43.0;
 
 // قرارداد هوشمند توکن کامیاب بر بستر TON
-contract KamiyabTokenTON {
+contract KamyabTokenTON {
 
     // ساختار نگهداری موجودی کاربران
     struct Wallet {
