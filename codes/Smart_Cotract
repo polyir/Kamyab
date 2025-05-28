@@ -1,0 +1,99 @@
+;; فایل token.fc – توکن KYT با قابلیت انتقال، mint و burn تحت کنترل DAO اولیه
+
+include "stdlib.fc" ;; کتابخانه توابع پایه
+
+const total_supply_init = 100000000 ;; کل عرضه اولیه توکن (۱۰۰ میلیون)
+
+int balance_map = 0 ;; نقشه ذخیره موجودی کاربران
+slice governance_token_holder = null(); ;; آدرس حاکم (در ابتدا مالک، در آینده DAO)
+int total_supply = total_supply_init;; متغیر قابل‌تغییر برای مجموع عرضه
+
+;; تابع init برای مقداردهی اولیه و تخصیص توکن‌ها
+() => {
+  governance_token_holder = get_caller(); ;; ذخیره آدرس اولیه حاکم (deployer)
+  store_balance(governance_token_holder, total_supply); ;; تخصیص کل موجودی به او
+  return ();
+}
+
+;; تابع ذخیره موجودی در نقشه
+builtin store_balance(addr: slice, amount: int) => {
+  map_set(balance_map, addr, amount);
+}
+
+;; تابع دریافت موجودی از نقشه
+builtin load_balance(addr: slice) : int => {
+  var balance = map_get(balance_map, addr);
+  if (balance) {
+    return balance?;
+  } else {
+    return 0;
+  }
+}
+
+;; تابع تغییر آدرس حاکم (مثلاً به DAO)
+() set_governance_holder(slice new_addr) => {
+  var sender = get_caller();
+  if (sender != governance_token_holder) {
+    throw(105);
+  }
+  governance_token_holder = new_addr;
+}
+
+;; تابع انتقال، mint و burn با کنترل حاکمیت
+() recv_internal(msg_value: int, in_msg: slice, in_msg_body: slice) => {
+  var sender = in_msg~load_msg_address();
+  var opcode = in_msg_body~load_int(); ;; شناسایی نوع عملیات
+
+  if (opcode == 0) { ;; انتقال عادی
+    var receiver = in_msg_body~load_msg_address();
+    var amount = in_msg_body~load_int();
+
+    var sender_balance = load_balance(sender);
+    if (sender_balance < amount) {
+      throw(101);
+    }
+
+    store_balance(sender, sender_balance - amount);
+    var receiver_balance = load_balance(receiver);
+    store_balance(receiver, receiver_balance + amount);
+
+    dump("Transfer", sender, receiver, amount);
+
+  } else if (opcode == 1) { ;; mint فقط برای governance_token_holder
+    if (sender != governance_token_holder) {
+      throw(102);
+    }
+    var amount = in_msg_body~load_int();
+    var current = load_balance(governance_token_holder);
+    store_balance(governance_token_holder, current + amount);
+    total_supply += amount;
+    dump("Mint", amount);
+
+  } else if (opcode == 2) { ;; burn فقط برای governance_token_holder
+    if (sender != governance_token_holder) {
+      throw(103);
+    }
+    var amount = in_msg_body~load_int();
+    var current = load_balance(governance_token_holder);
+    if (current < amount) {
+      throw(104);
+    }
+    store_balance(governance_token_holder, current - amount);
+    total_supply -= amount;
+    dump("Burn", amount);
+  }
+
+  return ();
+}
+
+;; تابع خواندن موجودی کاربران
+(int) get_balance(slice in_msg_body) => {
+  var target = in_msg_body~load_msg_address();
+  var balance = load_balance(target);
+  return balance;
+}
+
+;; تابع خواندن total supply فعلی
+(int) get_total_supply() => {
+  return total_supply;
+}
