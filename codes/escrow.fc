@@ -1,0 +1,92 @@
+;; فایل escrow.fc – قرارداد اسکرو مستقل با پشتیبانی از حاکمیت DAO
+
+include "stdlib.fc"
+
+int escrow_map = 0 ;; نقشه ذخیره تراکنش‌ها
+int tx_counter = 0 ;; شمارنده تراکنش‌ها
+slice governance_address = null(); ;; آدرس حاکم (در ابتدا deployer، در آینده DAO)
+slice token_contract = null(); ;; آدرس قرارداد توکن
+
+;; تعریف وضعیت‌ها
+int STATUS_PENDING = 0 ;; در انتظار تأیید
+int STATUS_COMPLETED = 1 ;; انجام شده
+int STATUS_REFUNDED = 2 ;; بازگشت داده شده
+
+;; مقداردهی اولیه آدرس حاکم و قرارداد توکن
+() => {
+  governance_address = get_caller();
+  return ();
+}
+
+;; تعیین آدرس قرارداد توکن KYT
+() set_token_address(slice new_token) => {
+  var sender = get_caller();
+  if (sender != governance_address) {
+    throw(201);
+  }
+  token_contract = new_token;
+}
+
+;; تغییر آدرس حاکم (برای DAO در آینده)
+() set_governance(slice new_gov) => {
+  var sender = get_caller();
+  if (sender != governance_address) {
+    throw(202);
+  }
+  governance_address = new_gov;
+}
+
+;; شروع تراکنش اسکرو
+() initiate(slice receiver, int amount) => {
+  var sender = get_caller();
+  var tx_id = tx_counter;
+  tx_counter += 1;
+
+  map_set(escrow_map, tx_id, [sender, receiver, amount, STATUS_PENDING]);
+
+  ;; انتقال توکن از sender به اسکرو (اینجا فرض بر سازگاری ABI توکن است)
+  call(token_contract, "transfer", [sender, my_address(), amount]);
+
+  dump("Initiated", tx_id);
+  return ();
+}
+
+;; تأیید تحویل بار
+() confirm(int tx_id) => {
+  var sender = get_caller();
+  var tx = map_get(escrow_map, tx_id)?;
+
+  var sender_addr = tx[0];
+  var receiver = tx[1];
+  var amount = tx[2];
+  var status = tx[3];
+
+  if (sender != sender_addr) {
+    throw(203);
+  }
+  if (status != STATUS_PENDING) {
+    throw(204);
+  }
+
+  call(token_contract, "transfer", [my_address(), receiver, amount]);
+  map_set(escrow_map, tx_id, [sender, receiver, amount, STATUS_COMPLETED]);
+  dump("Confirmed", tx_id);
+  return ();
+}
+
+;; بازپرداخت وجه (توسط حاکم)
+() refund(int tx_id) => {
+  var sender = get_caller();
+  if (sender != governance_address) {
+    throw(205);
+  }
+  var tx = map_get(escrow_map, tx_id)?;
+  var status = tx[3];
+  if (status != STATUS_PENDING) {
+    throw(206);
+  }
+  call(token_contract, "transfer", [my_address(), tx[0], tx[2]]);
+  map_set(escrow_map, tx_id, [tx[0], tx[1], tx[2], STATUS_REFUNDED]);
+  dump("Refunded", tx_id);
+  return ();
+}
